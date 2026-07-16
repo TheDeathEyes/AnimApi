@@ -18,8 +18,9 @@ session = requests.Session()
 @app.route('/search')
 def search():
     query = request.args.get('q', '')
-    url = f"{BASE_URL}/catalogue/?search={query}"
+    if not query: return jsonify([])
     
+    url = f"{BASE_URL}/catalogue/?search={query}"
     try:
         response = session.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
@@ -44,41 +45,59 @@ def search():
                     if link.startswith("/"): link = BASE_URL + link
                     resultats.append({"title": titre, "url": link})
 
-        # Retourne une liste unique (sans doublons)
         return jsonify(list({v['title']:v for v in resultats}.values()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 2. Route pour extraire les lecteurs et liens d'un anime spécifique
+# 2. Route pour extraire Métadonnées + Episodes
 @app.route('/episodes')
 def get_episodes():
     url_anime = request.args.get('url')
     if not url_anime:
         return jsonify({"error": "URL manquante"}), 400
 
-    url_anime = url_anime.rstrip('/')
-    donnees_resultat = {}
+    # --- PARTIE 1 : EXTRACTION METADONNEES ---
+    metadata = {"synopsis": "Synopsis non disponible.", "image": "", "trailer": None}
+    try:
+        page_res = session.get(url_anime, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(page_res.text, "html.parser")
+        
+        # Synopsis
+        synopsis_p = soup.find("p", id="synopsisText") or soup.find("p", class_=["synopsis", "text-sm"])
+        if synopsis_p: metadata["synopsis"] = synopsis_p.text.strip()
+        
+        # Image
+        img_tag = soup.find("meta", property="og:image") or soup.find("img", class_="cover")
+        if img_tag: metadata["image"] = img_tag.get("content") or img_tag.get("src")
+        
+        # Trailer
+        trailer_iframe = soup.find("iframe", src=re.compile(r"youtube|dailymotion|vimeo"))
+        if trailer_iframe: metadata["trailer"] = trailer_iframe.get("src")
+    except:
+        pass
 
-    # Liste des chemins où chercher les fichiers JS des épisodes
+    # --- PARTIE 2 : EXTRACTION EPISODES ---
+    url_base = url_anime.rstrip('/')
+    donnees_episodes = {}
+    
     variantes_sous_urls = [
-        f"{url_anime}/vostfr/episodes.js",
-        f"{url_anime}/vf/episodes.js",
-        f"{url_anime}/saison1/vostfr/episodes.js",
-        f"{url_anime}/saison1/vf/episodes.js",
-        f"{url_anime}/episodes.js"
+        f"{url_base}/vostfr/episodes.js",
+        f"{url_base}/vf/episodes.js",
+        f"{url_base}/saison1/vostfr/episodes.js",
+        f"{url_base}/saison1/vf/episodes.js",
+        f"{url_base}/episodes.js"
     ]
 
     for js_url in variantes_sous_urls:
         try:
             js_res = session.get(js_url, headers=HEADERS, timeout=5)
             if js_res.status_code == 200 and "eps" in js_res.text:
-                nom_version = js_url.replace(url_anime, "").replace("/episodes.js", "").strip("/").upper()
+                nom_version = js_url.replace(url_base, "").replace("/episodes.js", "").strip("/").upper()
                 if not nom_version: nom_version = "PRINCIPALE"
 
-                if nom_version not in donnees_resultat:
-                    donnees_resultat[nom_version] = {}
+                if nom_version not in donnees_episodes:
+                    donnees_episodes[nom_version] = {}
 
-                # Extraction des blocs eps via Regex
                 blocs = re.findall(r"var\s+(eps\d+)\s*=\s*\[([\s\S]*?)\]", js_res.text)
                 
                 for nom_var, bloc_liens in blocs:
@@ -89,29 +108,26 @@ def get_episodes():
                         
                         liens_corriges = []
                         for l in liens_bruts:
-                            # Correction vidmoly
-                            if "vidmoly.to" in l.lower():
-                                l = l.replace("vidmoly.to", "vidmoly.biz")
+                            if "vidmoly.to" in l.lower(): l = l.replace("vidmoly.to", "vidmoly.biz")
                             liens_corriges.append(l)
 
-                        # Identification du type de lecteur
+                        # Typage du lecteur
                         premier_lien = liens_corriges[0].lower()
                         if "embed4me" in premier_lien: nom_hebergeur += " (Embed4me)"
                         elif "vidmoly" in premier_lien: nom_hebergeur += " (Vidmoly)"
                         elif "sibnet" in premier_lien: nom_hebergeur += " (Sibnet)"
                         elif "uqload" in premier_lien: nom_hebergeur += " (Uqload)"
-                        elif "minochinos" in premier_lien: nom_hebergeur += " (Minochinos)"
                         elif "sendvid" in premier_lien: nom_hebergeur += " (Sendvid)"
                         elif "streamtape" in premier_lien: nom_hebergeur += " (Streamtape)"
                         
-                        donnees_resultat[nom_version][nom_hebergeur] = {
+                        donnees_episodes[nom_version][nom_hebergeur] = {
                             "num": num_lecteur,
                             "liens": liens_corriges
                         }
         except:
             continue
 
-    return jsonify(donnees_resultat)
+    return jsonify({"metadata": metadata, "episodes": donnees_episodes})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
