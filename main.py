@@ -11,50 +11,48 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 @app.route('/search')
 def search():
     query = request.args.get('q', '')
-    r = session.get(f"https://anime-sama.to/catalogue/?search={query}", headers=HEADERS)
+    url = f"https://anime-sama.to/catalogue/?search={query}"
+    r = session.get(url, headers=HEADERS)
     soup = BeautifulSoup(r.text, "html.parser")
-    results = []
-    # Recherche les liens d'animés
-    for a in soup.find_all("a", href=True):
-        if "/catalogue/" in a['href'] and len(a.text.strip()) > 3:
-            link = a['href'] if a['href'].startswith("http") else "https://anime-sama.to" + a['href']
-            results.append({"title": a.text.strip(), "url": link})
-    return jsonify(list({v['title']:v for v in results}.values()))
+    res = []
+    # Logique de scraping de ton Tkinter
+    cards = soup.find_all("a", href=re.compile(r"/catalogue/"))
+    for card in cards:
+        if card.text.strip():
+            res.append({"title": card.text.strip(), "url": card["href"] if card["href"].startswith("http") else "https://anime-sama.to"+card["href"]})
+    return jsonify(list({v['title']:v for v in res}.values()))
 
-@app.route('/episodes')
-def episodes():
-    url_base = request.args.get('url', '').rstrip('/')
-    # 1. On récupère la page principale pour trouver les liens des saisons/langues
-    r = session.get(url_base, headers=HEADERS)
+@app.route('/details')
+def details():
+    url = request.args.get('url', '')
+    r = session.get(url, headers=HEADERS)
     soup = BeautifulSoup(r.text, "html.parser")
     
-    # Récupérer tous les liens de sous-catégories (vf, vostfr, saison...)
-    liens_saisons = []
-    for a in soup.find_all("a", href=True):
-        if any(x in a['href'] for x in ["/vostfr/", "/vf/", "/saison"]):
-            full_link = a['href'] if a['href'].startswith("http") else "https://anime-sama.to" + a['href']
-            liens_saisons.append(full_link)
+    # 1. Synopsis
+    syno = soup.find("p", id="synopsisText")
+    syno_text = syno.text.strip() if syno else "Pas de synopsis."
+
+    # 2. Recherche fichiers JS (ta logique de variantes)
+    donnees = {}
+    variantes = ["/vostfr/", "/vf/", "/saison1/vostfr/", "/saison1/vf/", "/"]
     
-    liens_saisons = list(set(liens_saisons)) # Suppression des doublons
-    
-    # 2. Pour chaque saison, on cherche le fichier episodes.js
-    tous_les_lecteurs = []
-    for lien in liens_saisons:
-        r_saison = session.get(lien, headers=HEADERS)
-        # Chercher le script qui contient episodes.js
-        scripts = BeautifulSoup(r_saison.text, "html.parser").find_all("script", src=True)
-        for s in scripts:
-            if "episodes.js" in s['src']:
-                js_url = s['src'] if s['src'].startswith("http") else lien.rstrip('/') + "/" + s['src'].lstrip('/')
-                js_res = session.get(js_url, headers=HEADERS)
-                if js_res.status_code == 200:
-                    blocs = re.findall(r"var\s+(eps\d+)\s*=\s*\[([\s\S]*?)\]", js_res.text)
-                    for nom_var, bloc in blocs:
-                        liens = re.findall(r"['\"](https?://[^\s'\"`><]+)['\"]", bloc)
-                        if liens:
-                            tous_les_lecteurs.append({"title": f"Lecteur {nom_var.replace('eps','')}", "link": liens[0]})
-    
-    return jsonify(tous_les_lecteurs)
+    for v in variantes:
+        target = (url.rstrip('/') + v + "episodes.js").replace("//episodes", "/episodes")
+        js_r = session.get(target, headers=HEADERS)
+        
+        if js_r.status_code == 200 and "eps" in js_r.text:
+            nom_v = v.strip('/').upper() or "PRINCIPALE"
+            donnees[nom_v] = {}
+            blocs = re.findall(r"var\s+(eps\d+)\s*=\s*\[([\s\S]*?)\]", js_r.text)
+            
+            for nom_var, bloc in blocs:
+                liens = re.findall(r"['\"](https?://[^\s'\"`><]+)['\"]", bloc)
+                if liens:
+                    # Correction vidmoly
+                    liens = [l.replace("vidmoly.to", "vidmoly.biz") for l in liens]
+                    donnees[nom_v][f"Lecteur {nom_var.replace('eps','')}"] = liens
+                    
+    return jsonify({"synopsis": syno_text, "lecteurs": donnees})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
