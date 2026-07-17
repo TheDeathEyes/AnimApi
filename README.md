@@ -1,4 +1,4 @@
-# Anime Explorer Web
+# AnimApi
 
 Une interface de streaming d'animes légère et performante, permettant de rechercher des animes, de consulter les détails (synopsis, trailers) et de visionner les épisodes via une architecture hybride.
 
