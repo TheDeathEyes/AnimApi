@@ -6,7 +6,6 @@ from bs4 import BeautifulSoup
 app = Flask(__name__)
 CORS(app)
 
-# Configuration globale
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Referer": "https://anime-sama.to/"
@@ -56,7 +55,7 @@ def get_episodes():
     if not url_anime:
         return jsonify({"error": "URL manquante"}), 400
 
-    # --- PARTIE 1 : EXTRACTION METADONNEES ---
+    # A. Extraction Métadonnées
     metadata = {"synopsis": "Synopsis non disponible.", "image": "", "trailer": None}
     try:
         page_res = session.get(url_anime, headers=HEADERS, timeout=10)
@@ -70,40 +69,37 @@ def get_episodes():
         
         trailer_iframe = soup.find("iframe", src=re.compile(r"youtube|dailymotion|vimeo"))
         if trailer_iframe: metadata["trailer"] = trailer_iframe.get("src")
+        
+        # B. DÉCOUVERTE DYNAMIQUE
+        variantes_a_tester = set()
+        for link in soup.find_all("a", href=True):
+            href = link['href']
+            # On cherche tout ce qui contient 'saison' ou les versions directement
+            if any(x in href for x in ["/saison", "/vostfr/", "/vf/"]):
+                full_url = href if href.startswith("http") else f"{BASE_URL}{href}"
+                variantes_a_tester.add(f"{full_url.rstrip('/')}/episodes.js")
     except:
         pass
 
-    # --- PARTIE 2 : EXTRACTION EPISODES ---
-    url_base = url_anime.rstrip('/')
+    # C. EXTRACTION EPISODES
     donnees_episodes = {} 
     
-    variantes_sous_urls = [
-        f"{url_base}/vostfr/episodes.js", f"{url_base}/vf/episodes.js",
-        f"{url_base}/saison1/vostfr/episodes.js", f"{url_base}/saison1/vf/episodes.js",
-        f"{url_base}/saison2/vostfr/episodes.js", f"{url_base}/saison2/vf/episodes.js",
-        f"{url_base}/episodes.js" 
-    ]
-
-    for js_url in variantes_sous_urls:
+    for js_url in variantes_a_tester:
         try:
             js_res = session.get(js_url, headers=HEADERS, timeout=5)
             if js_res.status_code == 200 and "eps" in js_res.text:
                 js_url_lower = js_url.lower()
                 
-                # Nettoyage Saison
-                saison = "Saison 1" 
-                if "saison" in js_url_lower:
-                    match = re.search(r'saison(\d+)', js_url_lower)
-                    if match: saison = f"Saison {match.group(1)}"
+                # Regex amélioré : capture 'saison1' ou 'saison-1'
+                saison = "Saison 1"
+                match_saison = re.search(r'saison[-]?(\d+)', js_url_lower)
+                if match_saison:
+                    saison = f"Saison {match_saison.group(1)}"
                 elif "film" in js_url_lower:
                     saison = "Film"
                 
-                # Nettoyage Version
-                nom_version = "VOSTFR"
-                if "vf" in js_url_lower: nom_version = "VF"
-                elif "vostfr" in js_url_lower: nom_version = "VOSTFR"
+                nom_version = "VF" if "/vf/" in js_url_lower else "VOSTFR"
 
-                # Initialisation structure
                 if saison not in donnees_episodes: donnees_episodes[saison] = {}
                 if nom_version not in donnees_episodes[saison]: donnees_episodes[saison][nom_version] = {}
 
@@ -117,10 +113,12 @@ def get_episodes():
                         donnees_episodes[saison][nom_version][nom_hebergeur] = {"num": num_lecteur, "liens": liens_corriges}
         except: continue
 
-    # !!! C'EST ICI QU'IL MANQUAIT LE RETURN !!!
+    # Tri des clés pour un affichage propre dans le frontend
+    sorted_episodes = dict(sorted(donnees_episodes.items()))
+
     return jsonify({
         "metadata": metadata,
-        "episodes": donnees_episodes
+        "episodes": sorted_episodes
     })
 
 if __name__ == '__main__':
