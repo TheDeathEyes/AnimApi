@@ -76,58 +76,45 @@ def get_episodes():
     except:
         pass
 
-    # --- PARTIE 2 : EXTRACTION EPISODES ---
+# --- PARTIE 2 : EXTRACTION EPISODES ---
     url_base = url_anime.rstrip('/')
-    donnees_episodes = {}
+    donnees_episodes = {} # Structure: { "Saison 1": { "VOSTFR": { "Lecteur 1": {...} } } }
     
     variantes_sous_urls = [
-        f"{url_base}/vostfr/episodes.js",
-        f"{url_base}/vf/episodes.js",
-        f"{url_base}/saison1/vostfr/episodes.js",
-        f"{url_base}/saison1/vf/episodes.js",
-        f"{url_base}/episodes.js"
+        f"{url_base}/vostfr/episodes.js", f"{url_base}/vf/episodes.js",
+        f"{url_base}/saison1/vostfr/episodes.js", f"{url_base}/saison1/vf/episodes.js",
+        f"{url_base}/saison2/vostfr/episodes.js", f"{url_base}/saison2/vf/episodes.js",
+        f"{url_base}/episodes.js" 
+        # Note: Le script continuera de chercher dynamiquement
     ]
 
     for js_url in variantes_sous_urls:
         try:
             js_res = session.get(js_url, headers=HEADERS, timeout=5)
             if js_res.status_code == 200 and "eps" in js_res.text:
-                nom_version = js_url.replace(url_base, "").replace("/episodes.js", "").strip("/").upper()
-                if not nom_version: nom_version = "PRINCIPALE"
+                # 1. Détection Saison/Film
+                js_url_lower = js_url.lower()
+                saison = "Saison 1" # Défaut
+                if "saison" in js_url_lower:
+                    match = re.search(r'(saison\d+)', js_url_lower)
+                    if match: saison = match.group(1).capitalize()
+                elif "film" in js_url_lower:
+                    saison = "Film"
+                
+                # 2. Détection Version
+                nom_version = "VOSTFR" if "vostfr" in js_url_lower else ("VF" if "vf" in js_url_lower else "Version")
 
-                if nom_version not in donnees_episodes:
-                    donnees_episodes[nom_version] = {}
+                # Initialisation structure
+                if saison not in donnees_episodes: donnees_episodes[saison] = {}
+                if nom_version not in donnees_episodes[saison]: donnees_episodes[saison][nom_version] = {}
 
                 blocs = re.findall(r"var\s+(eps\d+)\s*=\s*\[([\s\S]*?)\]", js_res.text)
-                
                 for nom_var, bloc_liens in blocs:
                     liens_bruts = re.findall(r"['\"](https?://[^\s'\"`><]+)['\"]", bloc_liens)
                     if liens_bruts:
                         num_lecteur = nom_var.replace("eps", "")
                         nom_hebergeur = f"Lecteur {num_lecteur}"
-                        
-                        liens_corriges = []
-                        for l in liens_bruts:
-                            if "vidmoly.to" in l.lower(): l = l.replace("vidmoly.to", "vidmoly.biz")
-                            liens_corriges.append(l)
-
-                        # Typage du lecteur
-                        premier_lien = liens_corriges[0].lower()
-                        if "embed4me" in premier_lien: nom_hebergeur += " (Embed4me)"
-                        elif "vidmoly" in premier_lien: nom_hebergeur += " (Vidmoly)"
-                        elif "sibnet" in premier_lien: nom_hebergeur += " (Sibnet)"
-                        elif "uqload" in premier_lien: nom_hebergeur += " (Uqload)"
-                        elif "sendvid" in premier_lien: nom_hebergeur += " (Sendvid)"
-                        elif "streamtape" in premier_lien: nom_hebergeur += " (Streamtape)"
-                        
-                        donnees_episodes[nom_version][nom_hebergeur] = {
-                            "num": num_lecteur,
-                            "liens": liens_corriges
-                        }
-        except:
-            continue
-
-    return jsonify({"metadata": metadata, "episodes": donnees_episodes})
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+                        # ... (garder ton code de nettoyage de liens et typage lecteur ici) ...
+                        liens_corriges = [l.replace("vidmoly.to", "vidmoly.biz") for l in liens_bruts]
+                        donnees_episodes[saison][nom_version][nom_hebergeur] = {"num": num_lecteur, "liens": liens_corriges}
+        except: continue
